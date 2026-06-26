@@ -1,0 +1,9 @@
+apiVersion: batch.slo.operator.com/v1
+kind: SLO
+metadata:
+  labels:
+    app.kubernetes.io/name: slo-custom-ressource
+    app.kubernetes.io/managed-by: kustomize
+  name: slo-sample
+spec:
+  # TODO(user): Add fields here
