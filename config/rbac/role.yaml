@@ -1,11 +1,22 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/name: slo-custom-ressource
-    app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - batch.slo.operator.com
+  resources:
+  - slos
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch.slo.operator.com
+  resources:
+  - slos/status
+  verbs:
+  - get
+  - patch
+  - update

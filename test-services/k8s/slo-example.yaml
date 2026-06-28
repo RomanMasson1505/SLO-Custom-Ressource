@@ -1,0 +1,14 @@
+apiVersion: batch.slo.operator.com/v1
+kind: SLO
+metadata:
+  name: fake-api-slo
+  namespace: default
+spec:
+  target: "95.0"
+  prometheusAddress: "http://prometheus-server.monitoring.svc.cluster.local:9090"
+  # Metric : ratio succès/total, entre 0 et 1
+  # Le contrôleur enveloppera dans avg_over_time((...)[window:])
+  metric: 'rate(fake_api_http_requests_total{status="success"}[1m]) / rate(fake_api_http_requests_total[1m])'
+  window: "5m"
+  predictionWindow: "2m"
+  pollingInterval: "30s"
