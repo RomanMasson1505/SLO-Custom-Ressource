@@ -28,3 +28,8 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+train-go/
+
+# Personal detailed implementation plan (not versioned)
+PLAN-DETAILLE.md
