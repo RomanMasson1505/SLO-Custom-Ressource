@@ -5,17 +5,27 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - batch.slo.operator.com
+  - sre.slo.romanmasson.dev
   resources:
-  - slos
+  - servicelevelobjectives
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
-  - batch.slo.operator.com
+  - sre.slo.romanmasson.dev
   resources:
-  - slos/status
+  - servicelevelobjectives/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - sre.slo.romanmasson.dev
+  resources:
+  - servicelevelobjectives/status
   verbs:
   - get
   - patch

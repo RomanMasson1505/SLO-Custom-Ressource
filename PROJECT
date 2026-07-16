@@ -3,7 +3,7 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.15.0
-domain: slo.operator.com
+domain: slo.romanmasson.dev
 layout:
 - go.kubebuilder.io/v4
 projectName: slo-custom-ressource
@@ -13,9 +13,9 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: slo.operator.com
-  group: batch
-  kind: SLO
-  path: github.com/RomanMasson1505/SLO-Custom-Ressource/api/v1
-  version: v1
+  domain: slo.romanmasson.dev
+  group: sre
+  kind: ServiceLevelObjective
+  path: github.com/RomanMasson1505/SLO-Custom-Ressource/api/v1alpha1
+  version: v1alpha1
 version: "3"
