@@ -19,24 +19,38 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	srev1alpha1 "github.com/RomanMasson1505/SLO-Custom-Ressource/api/v1alpha1"
+	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/promclient"
 	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/rules"
 )
+
+// requeueInterval is how often we re-evaluate a healthy SLO's budget.
+const requeueInterval = 60 * time.Second
+
+// prometheusBackoff is the slower retry used when Prometheus is unreachable, so
+// we don't hammer the API while it is down.
+const prometheusBackoff = 2 * time.Minute
 
 // ServiceLevelObjectiveReconciler reconciles a ServiceLevelObjective object
 type ServiceLevelObjectiveReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Prom     promclient.PromAPI
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=sre.slo.romanmasson.dev,resources=servicelevelobjectives,verbs=get;list;watch;create;update;patch;delete
@@ -45,28 +59,23 @@ type ServiceLevelObjectiveReconciler struct {
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile brings the cluster closer to the desired state described by one
-// ServiceLevelObjective: it (re)generates the PrometheusRule that implements the
-// SLO's burn-rate alerting, owned by the SLO so it is garbage-collected with it.
+// ServiceLevelObjective: it (re)generates the owned PrometheusRule, then queries
+// Prometheus to evaluate the error budget and reports the result in the status.
 func (r *ServiceLevelObjectiveReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	// --- Layer 1: load the SLO ------------------------------------------------
-	// Reconcile only receives a name; we fetch the actual object. If it was
-	// deleted between the event and now, Get returns NotFound: nothing to do.
 	var slo srev1alpha1.ServiceLevelObjective
 	if err := r.Get(ctx, req.NamespacedName, &slo); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Snapshot the object now, so the status patch below only sends the diff.
+	// Snapshot now, so every status patch below only sends the diff.
 	base := client.MergeFrom(slo.DeepCopy())
 
 	// --- Layer 3a: build the desired PrometheusRule (pure, may reject bad spec) -
 	built, err := rules.Build(&slo)
 	if err != nil {
-		// Invalid user input (e.g. objective is not a number). A webhook will
-		// catch this earlier once implemented; here we just record it and stop
-		// without requeueing, to avoid a hot loop on a spec we cannot fix.
 		meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
 			Type:    srev1alpha1.CondRulesGenerated,
 			Status:  metav1.ConditionFalse,
@@ -82,9 +91,6 @@ func (r *ServiceLevelObjectiveReconciler) Reconcile(ctx context.Context, req ctr
 	}
 
 	// --- Layer 3b: create or update the PrometheusRule, idempotently ----------
-	// We address the child by name; CreateOrUpdate creates it if missing, or
-	// mutates the existing one to match `built`. The mutate func also stamps the
-	// OwnerReference so deleting the SLO cascades to this rule.
 	rule := &monitoringv1.PrometheusRule{
 		ObjectMeta: metav1.ObjectMeta{Name: built.Name, Namespace: built.Namespace},
 	}
@@ -94,7 +100,6 @@ func (r *ServiceLevelObjectiveReconciler) Reconcile(ctx context.Context, req ctr
 		return controllerutil.SetControllerReference(&slo, rule, r.Scheme)
 	})
 	if err != nil {
-		// A real cluster/API error: record it and requeue (return the error).
 		meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
 			Type:    srev1alpha1.CondRulesGenerated,
 			Status:  metav1.ConditionFalse,
@@ -105,22 +110,121 @@ func (r *ServiceLevelObjectiveReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 	log.Info("reconciled PrometheusRule", "operation", op, "name", rule.Name)
-
-	// --- Layer 6 (minimal for now): write the status --------------------------
-	// Budget/phase come in Phase 2 (querying Prometheus). For now we only assert
-	// that the rules were generated and record the reconciled generation.
 	meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
 		Type:    srev1alpha1.CondRulesGenerated,
 		Status:  metav1.ConditionTrue,
 		Reason:  "Applied",
 		Message: fmt.Sprintf("PrometheusRule %s %s", rule.Name, op),
 	})
+
+	// objective was already validated by rules.Build above; parse is safe here.
+	objective, _ := strconv.ParseFloat(slo.Spec.Objective, 64)
+	budget := 1 - objective/100 // 99.9 -> 0.001
+
+	// --- Layer 4: query Prometheus -------------------------------------------
+	// Error ratio over the full compliance window (drives the remaining budget)
+	// and over 1h (drives the current burn rate).
+	windowRatio, werr := r.queryRatio(ctx, &slo, slo.Spec.Window)
+	hourRatio, herr := r.queryRatio(ctx, &slo, "1h")
+	if qerr := firstErr(werr, herr); qerr != nil {
+		log.Error(qerr, "prometheus query failed")
+		meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
+			Type:    srev1alpha1.CondPrometheusReachable,
+			Status:  metav1.ConditionFalse,
+			Reason:  "QueryFailed",
+			Message: qerr.Error(),
+		})
+		slo.Status.Phase = srev1alpha1.PhaseUnknown
+		slo.Status.ObservedGeneration = slo.Generation
+		now := metav1.Now()
+		slo.Status.LastEvaluationTime = &now
+		if perr := r.Status().Patch(ctx, &slo, base); perr != nil {
+			return ctrl.Result{}, perr
+		}
+		// nil error + backoff: retry later without a hot loop.
+		return ctrl.Result{RequeueAfter: prometheusBackoff}, nil
+	}
+	meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
+		Type:    srev1alpha1.CondPrometheusReachable,
+		Status:  metav1.ConditionTrue,
+		Reason:  "Queried",
+		Message: "prometheus queried successfully",
+	})
+
+	// --- Layer 5: compute budget + phase (pure) ------------------------------
+	remaining := clamp(100*(1-windowRatio/budget), 0, 100)
+	burnRate := hourRatio / budget
+	newPhase := computePhase(remaining)
+
+	// --- Layer 7a: event on a real phase transition (before we overwrite it) --
+	if newPhase != slo.Status.Phase && r.Recorder != nil {
+		eventType := corev1.EventTypeNormal
+		if newPhase != srev1alpha1.PhaseHealthy {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Event(&slo, eventType, "PhaseChanged",
+			fmt.Sprintf("phase %q -> %q (budget remaining %.2f%%)", slo.Status.Phase, newPhase, remaining))
+	}
+
+	// --- Layer 6: write the status -------------------------------------------
+	slo.Status.ErrorBudgetRemaining = fmt.Sprintf("%.2f", remaining)
+	slo.Status.CurrentBurnRate = fmt.Sprintf("%.2f", burnRate)
+	slo.Status.Phase = newPhase
 	slo.Status.ObservedGeneration = slo.Generation
+	now := metav1.Now()
+	slo.Status.LastEvaluationTime = &now
+	meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
+		Type:    srev1alpha1.CondBudgetHealthy,
+		Status:  boolToCond(newPhase != srev1alpha1.PhaseExhausted),
+		Reason:  "Evaluated",
+		Message: fmt.Sprintf("%.2f%% budget remaining", remaining),
+	})
+	meta.SetStatusCondition(&slo.Status.Conditions, metav1.Condition{
+		Type:    srev1alpha1.CondReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "Reconciled",
+		Message: "SLO reconciled",
+	})
 	if err := r.Status().Patch(ctx, &slo, base); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// --- Layer 7b: come back to re-evaluate the budget periodically ----------
+	return ctrl.Result{RequeueAfter: requeueInterval}, nil
+}
+
+// queryRatio computes error/total over the given window by substituting the
+// window into the SLI queries and asking Prometheus for the ratio.
+func (r *ServiceLevelObjectiveReconciler) queryRatio(
+	ctx context.Context, slo *srev1alpha1.ServiceLevelObjective, window string,
+) (float64, error) {
+	errExpr, err := rules.SubstituteWindow(slo.Spec.SLI.ErrorQuery, window)
+	if err != nil {
+		return 0, err
+	}
+	totExpr, err := rules.SubstituteWindow(slo.Spec.SLI.TotalQuery, window)
+	if err != nil {
+		return 0, err
+	}
+	return r.Prom.QueryScalar(ctx, fmt.Sprintf("(%s) / (%s)", errExpr, totExpr))
+}
+
+// firstErr returns the first non-nil error, or nil.
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// boolToCond converts a boolean to a Kubernetes ConditionStatus.
+func boolToCond(b bool) metav1.ConditionStatus {
+	if b {
+		return metav1.ConditionTrue
+	}
+	return metav1.ConditionFalse
 }
 
 // SetupWithManager sets up the controller with the Manager.
