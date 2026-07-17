@@ -21,46 +21,96 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// ServiceLevelObjectiveSpec defines the desired state of ServiceLevelObjective
+// ServiceLevelObjectiveSpec is the desired state: what the user wants to guarantee.
 type ServiceLevelObjectiveSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of ServiceLevelObjective. Edit servicelevelobjective_types.go to remove/update
+	// Description is a human-readable summary of the SLO.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// Objective is the target in percent, e.g. "99.9".
+	// We keep it as a string on purpose: floats lose precision (99.9 -> 99.90000001)
+	// and don't round-trip cleanly through JSON. We parse it with ParseFloat when needed.
+	// +kubebuilder:validation:Required
+	Objective string `json:"objective"`
+
+	// Window is the rolling evaluation window, in Prometheus duration format (e.g. "30d").
+	// +kubebuilder:default:="30d"
+	Window string `json:"window,omitempty"`
+
+	// SLI describes what we actually measure.
+	SLI SLISpec `json:"sli"`
+
+	// Enforcement is optional opt-in behaviour (freeze deployments when the budget is gone).
+	// +optional
+	Enforcement *EnforcementSpec `json:"enforcement,omitempty"`
 }
 
-// ServiceLevelObjectiveStatus defines the observed state of ServiceLevelObjective.
+// SLISpec describes the Service Level Indicator: the signal we watch in Prometheus.
+type SLISpec struct {
+	// Type is the kind of SLI. Kept as an enum so the API server rejects typos.
+	// +kubebuilder:validation:Enum=availability;latency
+	Type string `json:"type"`
+
+	// TotalQuery is the PromQL for the denominator (all events).
+	// It may contain a {{.Window}} placeholder that the operator substitutes per burn-rate window,
+	// e.g. sum(rate(http_requests_total{service="checkout"}[{{.Window}}])).
+	TotalQuery string `json:"totalQuery"`
+
+	// ErrorQuery is the PromQL for the numerator (bad events), same {{.Window}} rules,
+	// e.g. sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}])).
+	ErrorQuery string `json:"errorQuery"`
+}
+
+// EnforcementSpec is the opt-in "deployment freeze" configuration.
+type EnforcementSpec struct {
+	// FreezeDeployments, when true, labels the matching Deployments once the budget is exhausted.
+	FreezeDeployments bool `json:"freezeDeployments,omitempty"`
+
+	// Selector picks the target Deployments in the SLO's namespace.
+	// The validating webhook requires it when FreezeDeployments is true.
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+}
+
+// ServiceLevelObjectiveStatus is the observed state: what the controller measured and decided.
 type ServiceLevelObjectiveStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// ErrorBudgetRemaining is the remaining error budget in percent (0-100).
+	// String for the same precision reason as Objective.
+	// +optional
+	ErrorBudgetRemaining string `json:"errorBudgetRemaining,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// CurrentBurnRate is the latest 1h burn rate (how many times faster than "normal" we burn budget).
+	// +optional
+	CurrentBurnRate string `json:"currentBurnRate,omitempty"`
 
-	// conditions represent the current state of the ServiceLevelObjective resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Phase is a one-word health summary: Healthy | Warning | Exhausted | Unknown.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
+	// Conditions are the standard, machine-readable state lines:
+	// Ready, RulesGenerated, PrometheusReachable, BudgetHealthy.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the spec generation the controller last reconciled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// LastEvaluationTime is when Prometheus was last queried successfully.
+	// +optional
+	LastEvaluationTime *metav1.Time `json:"lastEvaluationTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=slo
+// +kubebuilder:printcolumn:name="Objective",type=string,JSONPath=`.spec.objective`
+// +kubebuilder:printcolumn:name="Window",type=string,JSONPath=`.spec.window`
+// +kubebuilder:printcolumn:name="Budget-Remaining",type=string,JSONPath=`.status.errorBudgetRemaining`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ServiceLevelObjective is the Schema for the servicelevelobjectives API
 type ServiceLevelObjective struct {

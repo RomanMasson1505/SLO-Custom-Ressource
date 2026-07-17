@@ -11,10 +11,28 @@ spec:
     kind: ServiceLevelObjective
     listKind: ServiceLevelObjectiveList
     plural: servicelevelobjectives
+    shortNames:
+    - slo
     singular: servicelevelobjective
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.objective
+      name: Objective
+      type: string
+    - jsonPath: .spec.window
+      name: Window
+      type: string
+    - jsonPath: .status.errorBudgetRemaining
+      name: Budget-Remaining
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: ServiceLevelObjective is the Schema for the servicelevelobjectives
@@ -40,25 +58,114 @@ spec:
           spec:
             description: spec defines the desired state of ServiceLevelObjective
             properties:
-              foo:
-                description: foo is an example field of ServiceLevelObjective. Edit
-                  servicelevelobjective_types.go to remove/update
+              description:
+                description: Description is a human-readable summary of the SLO.
                 type: string
+              enforcement:
+                description: Enforcement is optional opt-in behaviour (freeze deployments
+                  when the budget is gone).
+                properties:
+                  freezeDeployments:
+                    description: FreezeDeployments, when true, labels the matching
+                      Deployments once the budget is exhausted.
+                    type: boolean
+                  selector:
+                    description: |-
+                      Selector picks the target Deployments in the SLO's namespace.
+                      The validating webhook requires it when FreezeDeployments is true.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              objective:
+                description: |-
+                  Objective is the target in percent, e.g. "99.9".
+                  We keep it as a string on purpose: floats lose precision (99.9 -> 99.90000001)
+                  and don't round-trip cleanly through JSON. We parse it with ParseFloat when needed.
+                type: string
+              sli:
+                description: SLI describes what we actually measure.
+                properties:
+                  errorQuery:
+                    description: |-
+                      ErrorQuery is the PromQL for the numerator (bad events), same {{.Window}} rules,
+                      e.g. sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}])).
+                    type: string
+                  totalQuery:
+                    description: |-
+                      TotalQuery is the PromQL for the denominator (all events).
+                      It may contain a {{.Window}} placeholder that the operator substitutes per burn-rate window,
+                      e.g. sum(rate(http_requests_total{service="checkout"}[{{.Window}}])).
+                    type: string
+                  type:
+                    description: Type is the kind of SLI. Kept as an enum so the API
+                      server rejects typos.
+                    enum:
+                    - availability
+                    - latency
+                    type: string
+                required:
+                - errorQuery
+                - totalQuery
+                - type
+                type: object
+              window:
+                default: 30d
+                description: Window is the rolling evaluation window, in Prometheus
+                  duration format (e.g. "30d").
+                type: string
+            required:
+            - objective
+            - sli
             type: object
           status:
             description: status defines the observed state of ServiceLevelObjective
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the ServiceLevelObjective resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  Conditions are the standard, machine-readable state lines:
+                  Ready, RulesGenerated, PrometheusReachable, BudgetHealthy.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -117,6 +224,29 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentBurnRate:
+                description: CurrentBurnRate is the latest 1h burn rate (how many
+                  times faster than "normal" we burn budget).
+                type: string
+              errorBudgetRemaining:
+                description: |-
+                  ErrorBudgetRemaining is the remaining error budget in percent (0-100).
+                  String for the same precision reason as Objective.
+                type: string
+              lastEvaluationTime:
+                description: LastEvaluationTime is when Prometheus was last queried
+                  successfully.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the controller
+                  last reconciled.
+                format: int64
+                type: integer
+              phase:
+                description: 'Phase is a one-word health summary: Healthy | Warning
+                  | Exhausted | Unknown.'
+                type: string
             type: object
         required:
         - spec
