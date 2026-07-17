@@ -21,7 +21,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -46,7 +48,7 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 		servicelevelobjective := &srev1alpha1.ServiceLevelObjective{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind ServiceLevelObjective")
+			By("creating a valid custom resource for the Kind ServiceLevelObjective")
 			err := k8sClient.Get(ctx, typeNamespacedName, servicelevelobjective)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &srev1alpha1.ServiceLevelObjective{
@@ -54,7 +56,15 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: srev1alpha1.ServiceLevelObjectiveSpec{
+						Objective: "99.9",
+						Window:    "30d",
+						SLI: srev1alpha1.SLISpec{
+							Type:       "availability",
+							TotalQuery: `sum(rate(http_requests_total{service="test"}[{{.Window}}]))`,
+							ErrorQuery: `sum(rate(http_requests_total{service="test",code=~"5.."}[{{.Window}}]))`,
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -69,7 +79,7 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 			By("Cleanup the specific resource instance ServiceLevelObjective")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+		It("should generate an owned PrometheusRule and set the status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ServiceLevelObjectiveReconciler{
 				Client: k8sClient,
@@ -80,8 +90,25 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("checking that a PrometheusRule owned by the SLO was created")
+			var pr monitoringv1.PrometheusRule
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resourceName + "-slo-rules",
+				Namespace: resourceNamespace,
+			}, &pr)).To(Succeed())
+			Expect(pr.OwnerReferences).To(HaveLen(1))
+			Expect(pr.OwnerReferences[0].Kind).To(Equal("ServiceLevelObjective"))
+			// 7 recording rules + 4 burn-rate alerts.
+			Expect(pr.Spec.Groups).To(HaveLen(1))
+			Expect(pr.Spec.Groups[0].Rules).To(HaveLen(11))
+
+			By("checking that the status reports RulesGenerated=True")
+			var got srev1alpha1.ServiceLevelObjective
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &got)).To(Succeed())
+			cond := meta.FindStatusCondition(got.Status.Conditions, srev1alpha1.CondRulesGenerated)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 })
