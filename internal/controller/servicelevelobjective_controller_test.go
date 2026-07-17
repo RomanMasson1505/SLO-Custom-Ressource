@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -82,8 +83,10 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 		It("should generate an owned PrometheusRule and set the status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ServiceLevelObjectiveReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Prom:     fakeProm{ratio: 0.0005}, // 50% of a 0.001 budget consumed
+				Recorder: record.NewFakeRecorder(10),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -103,12 +106,14 @@ var _ = Describe("ServiceLevelObjective Controller", func() {
 			Expect(pr.Spec.Groups).To(HaveLen(1))
 			Expect(pr.Spec.Groups[0].Rules).To(HaveLen(11))
 
-			By("checking that the status reports RulesGenerated=True")
+			By("checking that the status reports the evaluated budget and phase")
 			var got srev1alpha1.ServiceLevelObjective
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &got)).To(Succeed())
 			cond := meta.FindStatusCondition(got.Status.Conditions, srev1alpha1.CondRulesGenerated)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(got.Status.Phase).To(Equal(srev1alpha1.PhaseHealthy))
+			Expect(got.Status.ErrorBudgetRemaining).To(Equal("50.00"))
 		})
 	})
 })

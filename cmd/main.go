@@ -38,6 +38,7 @@ import (
 
 	srev1alpha1 "github.com/RomanMasson1505/SLO-Custom-Ressource/api/v1alpha1"
 	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/controller"
+	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/promclient"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -65,6 +66,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var prometheusURL string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -83,6 +85,9 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&prometheusURL, "prometheus-url",
+		"http://kube-prometheus-stack-prometheus.monitoring.svc:9090",
+		"Base URL of the Prometheus server used to evaluate error budgets.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -182,9 +187,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	prom, err := promclient.New(prometheusURL)
+	if err != nil {
+		setupLog.Error(err, "Failed to create Prometheus client")
+		os.Exit(1)
+	}
+
 	if err := (&controller.ServiceLevelObjectiveReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Prom:     prom,
+		Recorder: mgr.GetEventRecorderFor("slo-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "servicelevelobjective")
 		os.Exit(1)
