@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -63,11 +64,19 @@ var _ = BeforeSuite(func() {
 	err = srev1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	// PrometheusRule is a third-party CRD our controller creates; the test
+	// apiserver must know its type (scheme) and schema (CRD, installed below).
+	err = monitoringv1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"), // our ServiceLevelObjective CRD
+			filepath.Join("..", "..", "test", "crds"),           // vendored PrometheusRule CRD
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 
