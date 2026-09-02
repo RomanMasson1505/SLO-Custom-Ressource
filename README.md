@@ -64,7 +64,7 @@ spec:
 | `sli.type` | ✅ | `availability` or `latency`. Immutable after creation. |
 | `sli.totalQuery` | ✅ | PromQL for the denominator (all events). May contain `{{.Window}}`. |
 | `sli.errorQuery` | ✅ | PromQL for the numerator (bad events). May contain `{{.Window}}`. |
-| `enforcement` | | *(planned)* Freeze deployments when the budget is exhausted. |
+| `enforcement` | | Opt-in. When the budget is exhausted, label the selected Deployments (see [Enforcement](#enforcement)). |
 
 The `{{.Window}}` placeholder is substituted per burn-rate window when the operator
 generates the recording rules.
@@ -104,6 +104,35 @@ window (clears the alert quickly once fixed). Both must exceed `burnRate × budg
 | warning (ticket) | 6h | 3d | 1 | 10% in 3d |
 
 These factors are calibrated for a 30-day window (Google SRE Workbook).
+
+---
+
+## Enforcement
+
+Enforcement is opt-in per SLO. When enabled and the budget reaches `Exhausted`, the
+operator stamps every Deployment matching the selector (in the SLO's namespace) with:
+
+```
+slo.io/budget-exhausted: "true"
+```
+
+The label is removed automatically once the phase returns to `Healthy`/`Warning`.
+
+```yaml
+spec:
+  enforcement:
+    freezeDeployments: true
+    selector:
+      matchLabels:
+        app: checkout
+```
+
+The operator only **sets the label** — it deliberately does not block anything itself.
+A cluster admin decides what the label means by applying a policy such as the
+`ValidatingAdmissionPolicy` example in
+[`config/samples/validatingadmissionpolicy_freeze.yaml`](config/samples/validatingadmissionpolicy_freeze.yaml),
+which rejects image changes on frozen Deployments. This keeps *who marks* and *who
+blocks* cleanly separated.
 
 ---
 
@@ -162,7 +191,7 @@ orchestration in the controller.**
 - [x] Apply the rule from the reconcile loop (owner reference, idempotent)
 - [x] Error-budget evaluation from Prometheus (budget %, burn rate, phase, events)
 - [x] Admission webhooks (defaulting + validation, PromQL parsing, immutability)
-- [ ] Enforcement: freeze Deployments when the budget is exhausted
+- [x] Enforcement: label Deployments when the budget is exhausted (+ VAP example)
 - [ ] CI (lint + test + build) and multi-arch release image
 - [ ] End-to-end tests on kind + quickstart
 
