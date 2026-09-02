@@ -23,6 +23,7 @@ import (
 	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,6 +55,9 @@ func newScheme(t *testing.T) *runtime.Scheme {
 		t.Fatal(err)
 	}
 	if err := monitoringv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := appsv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,10 @@ const requeueInterval = 60 * time.Second
 // we don't hammer the API while it is down.
 const prometheusBackoff = 2 * time.Minute
 
+// budgetExhaustedLabel is stamped on targeted Deployments once the budget is gone,
+// so an external policy (e.g. a ValidatingAdmissionPolicy) can freeze rollouts.
+const budgetExhaustedLabel = "slo.io/budget-exhausted"
+
 // ServiceLevelObjectiveReconciler reconciles a ServiceLevelObjective object
 type ServiceLevelObjectiveReconciler struct {
 	client.Client
@@ -57,6 +62,7 @@ type ServiceLevelObjectiveReconciler struct {
 // +kubebuilder:rbac:groups=sre.slo.romanmasson.dev,resources=servicelevelobjectives/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sre.slo.romanmasson.dev,resources=servicelevelobjectives/finalizers,verbs=update
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 
 // Reconcile brings the cluster closer to the desired state described by one
 // ServiceLevelObjective: it (re)generates the owned PrometheusRule, then queries
@@ -189,8 +195,72 @@ func (r *ServiceLevelObjectiveReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
+	// --- Layer 8: enforcement (optional) -------------------------------------
+	// Freeze/unfreeze the targeted Deployments based on the new phase.
+	if err := r.reconcileEnforcement(ctx, &slo, newPhase); err != nil {
+		log.Error(err, "enforcement failed")
+		return ctrl.Result{}, err
+	}
+
 	// --- Layer 7b: come back to re-evaluate the budget periodically ----------
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
+}
+
+// reconcileEnforcement labels (or unlabels) the Deployments selected by the SLO,
+// depending on whether the budget is exhausted. It is a no-op unless the SLO
+// opted in via spec.enforcement.freezeDeployments.
+func (r *ServiceLevelObjectiveReconciler) reconcileEnforcement(
+	ctx context.Context, slo *srev1alpha1.ServiceLevelObjective, phase string,
+) error {
+	e := slo.Spec.Enforcement
+	if e == nil || !e.FreezeDeployments || e.Selector == nil {
+		return nil // enforcement disabled (selector is guaranteed by the webhook)
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(e.Selector)
+	if err != nil {
+		return fmt.Errorf("invalid enforcement selector: %w", err)
+	}
+
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments,
+		client.InNamespace(slo.Namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		return err
+	}
+
+	freeze := phase == srev1alpha1.PhaseExhausted
+	for i := range deployments.Items {
+		d := &deployments.Items[i]
+		_, labeled := d.Labels[budgetExhaustedLabel]
+		if freeze == labeled {
+			continue // already in the desired state: nothing to do
+		}
+
+		patch := client.MergeFrom(d.DeepCopy())
+		if freeze {
+			if d.Labels == nil {
+				d.Labels = map[string]string{}
+			}
+			d.Labels[budgetExhaustedLabel] = "true"
+		} else {
+			delete(d.Labels, budgetExhaustedLabel)
+		}
+		if err := r.Patch(ctx, d, patch); err != nil {
+			return err
+		}
+
+		if r.Recorder != nil {
+			verb := "Unfroze"
+			if freeze {
+				verb = "Froze"
+			}
+			r.Recorder.Event(slo, corev1.EventTypeWarning, "DeploymentFreeze",
+				fmt.Sprintf("%s deployment %s/%s (phase %s)", verb, d.Namespace, d.Name, phase))
+		}
+	}
+	return nil
 }
 
 // queryRatio computes error/total over the given window by substituting the
