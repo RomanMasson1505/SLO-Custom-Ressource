@@ -39,6 +39,7 @@ import (
 	srev1alpha1 "github.com/RomanMasson1505/SLO-Custom-Ressource/api/v1alpha1"
 	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/controller"
 	"github.com/RomanMasson1505/SLO-Custom-Ressource/internal/promclient"
+	webhookv1alpha1 "github.com/RomanMasson1505/SLO-Custom-Ressource/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -201,6 +202,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "servicelevelobjective")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupServiceLevelObjectiveWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "ServiceLevelObjective")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
