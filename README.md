@@ -1,117 +1,173 @@
-# SLO-Custom-Resource
+# SLO Operator
 
-A Kubernetes Custom Resource for Service Level Objectives (SLO) monitoring and proactive management.
+A Kubernetes operator that turns **Service Level Objectives** into native Kubernetes
+resources. Declare an SLO once, and the operator generates the Prometheus alerting
+rules, continuously evaluates the error budget, and reports the result in the
+resource status.
 
-## 📋 Overview
+> Status: work in progress. The core is functional end to end (rule generation +
+> budget evaluation + admission webhooks). See the [roadmap](#roadmap).
 
-**SLO-Custom-Resource** is a Kubernetes operator that enables you to define, monitor, and predict the compliance of your applications with Service Level Objectives (SLO). The resource integrates with Prometheus metrics to provide real-time visibility into your services' SLO conformance.
+---
 
-## 🎯 Goals
+## What it does
 
-- **Active Monitoring** : Continuously verify that a service meets its SLO objectives based on Prometheus metrics
-- **Proactive Alerts** : Immediately alert when the error budget quota is exceeded
-- **Budget Prediction** : Anticipate whether current consumption aligns with the budgetary objective over the defined period
-- **Real-time Management** : Analyze two time windows (observation and prediction) for optimized decision-making
+For every `ServiceLevelObjective` you apply, the operator:
 
-## ⚡ Key Features
+1. **Generates a `PrometheusRule`** containing
+   - recording rules for the SLI error ratio across every burn-rate window, and
+   - **multi-window, multi-burn-rate** alerts following the
+     [Google SRE Workbook](https://sre.google/workbook/alerting-on-slos/).
+2. **Evaluates the error budget** by querying Prometheus, and writes the remaining
+   budget, the current burn rate and a health phase to the status.
+3. **Validates and defaults** every SLO through admission webhooks, so a broken spec
+   is rejected before it reaches the cluster.
 
-### SLO Monitoring
-- Continuous evaluation of metrics against defined thresholds
-- Support for multi-dimensional Prometheus metrics
-- Real-time SLO status (compliant, warning, breach)
-
-### Alert System
-- Notifications when error budget quota is exceeded
-- Configurable tolerance thresholds
-- Integration with Kubernetes alerting systems
-
-### Prediction & Budget Tracking
-- SLO compliance projection based on current trends
-- Error budget consumption tracking across two time windows
-- Preventive action recommendations
-
-## 🏗️ Architecture
-
-```
-SLO-Custom-Resource
-├── CRD (Custom Resource Definition)
-│   └── SLO Specifications
-├── Controller (Operator)
-│   ├── Prometheus metrics retrieval
-│   ├── Compliance evaluation
-│   ├── Budget prediction
-│   └── Alert management
-└── Status
-    ├── Current state
-    ├── Compliance status
-    └── Predictions
+```mermaid
+flowchart LR
+    U[kubectl apply SLO] --> W[Admission webhooks<br/>default + validate]
+    W --> API[apiserver] --> ETCD[(etcd)]
+    ETCD -->|watch| REC[Reconcile]
+    REC -->|build + apply| PR[PrometheusRule]
+    PR -.ownerRef.-> SLO[ServiceLevelObjective]
+    PROM[Prometheus] --> PR
+    REC -->|query error ratio| PROM
+    REC -->|patch status| ETCD
 ```
 
-## 📊 Usage Example
+---
+
+## The `ServiceLevelObjective` resource
 
 ```yaml
-apiVersion: slo.example.com/v1
+apiVersion: sre.slo.romanmasson.dev/v1alpha1
 kind: ServiceLevelObjective
 metadata:
-  name: api-availability-slo
-  namespace: production
+  name: checkout-availability
+  namespace: shop
 spec:
-  service: my-api
-  description: "API Availability - 99.9% Target"
-  
-  # SLO Definition
-  objectives:
-    - metric: http_requests_total
-      threshold: 99.9
-      window: 30d
-  
-  # Observation Window (for alerts)
-  observationWindow: 1h
-  
-  # Prediction Window (for budget tracking)
-  predictionWindow: 7d
-  
-  # Prometheus Configuration
-  prometheusQuery: |
-    (1 - (rate(http_requests_total{status=~"5.."}[5m]) / 
-    rate(http_requests_total[5m]))) * 100
-  
-  # Alerting
-  alerting:
-    enabled: true
-    errorBudgetThreshold: 10
+  description: "Checkout API availability"
+  objective: "99.9"        # target in percent, kept as a string for precision
+  window: 30d              # rolling compliance window (Prometheus duration)
+  sli:
+    type: availability     # availability | latency
+    totalQuery: sum(rate(http_requests_total{service="checkout"}[{{.Window}}]))
+    errorQuery: sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}]))
 ```
 
-## 🔍 Use Cases
+### Spec fields
 
-1. **REST APIs** : Monitor the availability and latency of critical services
-2. **Microservices** : Manage SLOs across a distributed architecture
-3. **Multi-tenant** : Define differentiated SLOs per client/tenant
-4. **Cost Optimization** : Predict and optimize resource consumption based on error budget
+| Field | Required | Description |
+|---|---|---|
+| `objective` | ✅ | Target in percent, e.g. `"99.9"`. String to avoid float rounding. Must be in `(0, 100)`. |
+| `window` | | Rolling window (default `30d`). Any valid Prometheus duration. |
+| `sli.type` | ✅ | `availability` or `latency`. Immutable after creation. |
+| `sli.totalQuery` | ✅ | PromQL for the denominator (all events). May contain `{{.Window}}`. |
+| `sli.errorQuery` | ✅ | PromQL for the numerator (bad events). May contain `{{.Window}}`. |
+| `enforcement` | | *(planned)* Freeze deployments when the budget is exhausted. |
 
-## 🛠️ Tech Stack
+The `{{.Window}}` placeholder is substituted per burn-rate window when the operator
+generates the recording rules.
 
-- **Kubernetes** : Target platform
-- **Prometheus** : Metrics source
-- **Go** : Development language (recommended for Kubernetes operators)
-- **kubebuilder** : Framework for building the operator (optional)
+### Status
 
-## 📝 Roadmap
+`kubectl get slo` surfaces the key columns:
 
-- [ ] CRD implementation
-- [ ] Controller development
-- [ ] Prometheus metrics retrieval and parsing
-- [ ] SLO compliance calculation
-- [ ] Budget prediction system
-- [ ] Alert integration
-- [ ] Unit and integration tests
-- [ ] Complete documentation
-- [ ] Deployment examples
+```
+NAME                   OBJECTIVE   WINDOW   BUDGET-REMAINING   PHASE     AGE
+checkout-availability  99.9        30d      87.30              Healthy   2d
+```
 
-## 📄 License
+| Field | Meaning |
+|---|---|
+| `errorBudgetRemaining` | Remaining error budget in percent (0–100). |
+| `currentBurnRate` | How many times faster than nominal the budget is being spent. |
+| `phase` | `Healthy` (>25% left), `Warning` (≤25%), `Exhausted` (≤0%), `Unknown` (Prometheus unreachable). |
+| `conditions` | `Ready`, `RulesGenerated`, `PrometheusReachable`, `BudgetHealthy`. |
 
-MIT
+---
 
-## 👤 Author
+## How burn-rate alerting works
 
-Your Name / Your Organization
+The error budget is what you're allowed to fail: a 99.9% objective over 30 days
+allows ~43 minutes of downtime per month. The **burn rate** is how fast you spend it
+(1 = spend it exactly over the window; 14.4 = spend it all in ~2 days).
+
+Each alert combines a **long** window (confirms the problem is real) and a **short**
+window (clears the alert quickly once fixed). Both must exceed `burnRate × budget`:
+
+| Severity | Short window | Long window | Burn rate | Budget spent to fire |
+|---|---|---|---|---|
+| critical (page) | 5m | 1h | 14.4 | 2% in 1h |
+| critical (page) | 30m | 6h | 6 | 5% in 6h |
+| warning (ticket) | 2h | 1d | 3 | 10% in 1d |
+| warning (ticket) | 6h | 3d | 1 | 10% in 3d |
+
+These factors are calibrated for a 30-day window (Google SRE Workbook).
+
+---
+
+## Getting started (development)
+
+Prerequisites: Go 1.26, `make`, and (for integration tests) the envtest binaries.
+
+```bash
+# Run all unit + integration tests (downloads envtest binaries on first run)
+make test
+
+# Run the operator locally against your current kubecontext
+make run
+# ...or point it at a specific Prometheus:
+go run ./cmd/main.go --prometheus-url=http://localhost:9090
+
+# Install the CRD into the cluster
+make install
+```
+
+The operator reads Prometheus at `--prometheus-url`
+(default `http://kube-prometheus-stack-prometheus.monitoring.svc:9090`).
+
+### Fast iteration (no cluster needed)
+
+The core logic is pure and testable without a cluster:
+
+```bash
+go test ./internal/rules/...                        # rule generation (golden tests)
+go test ./internal/controller/ -run TestReconcile   # reconcile logic (fake client)
+go test ./internal/webhook/...                      # validation logic
+```
+
+---
+
+## Project layout
+
+```
+api/v1alpha1/            API types (Spec/Status) + phase & condition constants
+internal/rules/          Pure SLO -> PrometheusRule generation (+ golden tests)
+internal/promclient/     Thin, mockable Prometheus client (PromAPI interface)
+internal/controller/     Reconcile loop + budget/phase computation
+internal/webhook/        Defaulting + validating admission webhooks
+cmd/main.go              Wiring: flags, scheme, controller, webhooks
+```
+
+Design principle: **isolate the pure logic, test it without a cluster, and keep only
+orchestration in the controller.**
+
+---
+
+## Roadmap
+
+- [x] API types + CRD (Spec/Status, printer columns, short name `slo`)
+- [x] `PrometheusRule` generation (recording rules + burn-rate alerts)
+- [x] Apply the rule from the reconcile loop (owner reference, idempotent)
+- [x] Error-budget evaluation from Prometheus (budget %, burn rate, phase, events)
+- [x] Admission webhooks (defaulting + validation, PromQL parsing, immutability)
+- [ ] Enforcement: freeze Deployments when the budget is exhausted
+- [ ] CI (lint + test + build) and multi-arch release image
+- [ ] End-to-end tests on kind + quickstart
+
+---
+
+## License
+
+Apache-2.0.
