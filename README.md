@@ -1,5 +1,8 @@
 # SLO Operator
 
+[![Lint](https://github.com/RomanMasson1505/SLO-Custom-Ressource/actions/workflows/lint.yml/badge.svg)](https://github.com/RomanMasson1505/SLO-Custom-Ressource/actions/workflows/lint.yml)
+[![Tests](https://github.com/RomanMasson1505/SLO-Custom-Ressource/actions/workflows/test.yml/badge.svg)](https://github.com/RomanMasson1505/SLO-Custom-Ressource/actions/workflows/test.yml)
+
 A Kubernetes operator that turns **Service Level Objectives** into native Kubernetes
 resources. Declare an SLO once, and the operator generates the Prometheus alerting
 rules, continuously evaluates the error budget, and reports the result in the

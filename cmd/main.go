@@ -195,10 +195,12 @@ func main() {
 	}
 
 	if err := (&controller.ServiceLevelObjectiveReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Prom:     prom,
-		Recorder: mgr.GetEventRecorderFor("slo-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Prom:   prom,
+		// record.EventRecorder remains the standard operator events API; migrating
+		// to the newer events.EventRecorder is intentionally out of scope here.
+		Recorder: mgr.GetEventRecorderFor("slo-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "servicelevelobjective")
 		os.Exit(1)
