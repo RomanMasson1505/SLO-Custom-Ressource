@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -43,9 +44,7 @@ func enforcingSLO() *srev1alpha1.ServiceLevelObjective {
 
 func checkoutDeployment(labels map[string]string) *appsv1.Deployment {
 	l := map[string]string{"app": "checkout"}
-	for k, v := range labels {
-		l[k] = v
-	}
+	maps.Copy(l, labels)
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "shop", Labels: l},
 	}

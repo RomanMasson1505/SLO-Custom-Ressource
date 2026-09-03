@@ -53,6 +53,10 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Test fixtures legitimately repeat small string literals.
+      - linters:
+          - goconst
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

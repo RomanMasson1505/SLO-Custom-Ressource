@@ -41,6 +41,12 @@ import (
 // the Prometheus convention for "this is a recording rule, not a raw metric".
 const metricPrefix = "slo:sli_error:ratio_rate"
 
+// Labels stamped on every generated rule so alerts can be traced back to their SLO.
+const (
+	labelSLOName      = "slo_name"
+	labelSLONamespace = "slo_namespace"
+)
+
 // recordingWindows is every rolling window we pre-compute the error ratio for.
 // The alerting rules below only ever reference windows from this list.
 var recordingWindows = []string{"5m", "30m", "1h", "2h", "6h", "1d", "3d"}
@@ -96,8 +102,8 @@ func buildRecordingRules(slo *slov1alpha1.ServiceLevelObjective) ([]monitoringv1
 			Record: metricPrefix + w,
 			Expr:   intstr.FromString(fmt.Sprintf("(%s) / (%s)", errExpr, totExpr)),
 			Labels: map[string]string{
-				"slo_name":      slo.Name,
-				"slo_namespace": slo.Namespace,
+				labelSLOName:      slo.Name,
+				labelSLONamespace: slo.Namespace,
 			},
 		})
 	}
@@ -121,9 +127,9 @@ func buildAlertingRules(slo *slov1alpha1.ServiceLevelObjective, budget float64) 
 			Expr:  intstr.FromString(expr),
 			For:   ptr.To(monitoringv1.Duration("2m")),
 			Labels: map[string]string{
-				"severity":      l.severity,
-				"slo_name":      slo.Name,
-				"slo_namespace": slo.Namespace,
+				"severity":        l.severity,
+				labelSLOName:      slo.Name,
+				labelSLONamespace: slo.Namespace,
 			},
 			Annotations: map[string]string{
 				"summary": fmt.Sprintf("SLO %s is burning error budget %gx too fast", slo.Name, l.factor),
@@ -155,7 +161,7 @@ func Build(slo *slov1alpha1.ServiceLevelObjective) (*monitoringv1.PrometheusRule
 			Namespace: slo.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "slo-operator",
-				"slo_name":                     slo.Name,
+				labelSLOName:                   slo.Name,
 			},
 		},
 		Spec: monitoringv1.PrometheusRuleSpec{

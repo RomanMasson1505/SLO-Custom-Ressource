@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -130,7 +129,7 @@ func TestReconcile_CreatesOwnedPrometheusRule(t *testing.T) {
 
 func TestReconcile_Idempotent(t *testing.T) {
 	r, cl := newFixture(t, testSLO(), fakeProm{ratio: 0.0005})
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: checkoutKey}); err != nil {
 			t.Fatalf("Reconcile pass %d: %v", i, err)
 		}
@@ -222,7 +221,7 @@ func TestReconcile_InvalidObjectiveDoesNotRequeue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invalid spec should not return an error, got: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != time.Duration(0) {
+	if res.RequeueAfter != 0 {
 		t.Errorf("invalid spec should not requeue, got %+v", res)
 	}
 
