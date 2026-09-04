@@ -139,6 +139,55 @@ blocks* cleanly separated.
 
 ---
 
+## Quickstart (local cluster)
+
+Try the whole thing end to end on a local cluster (minikube shown; kind works too).
+Prerequisites: `docker`, `kubectl`, `helm`, and minikube.
+
+```bash
+# 1. a local cluster
+minikube start --cpus=2 --memory=3600
+
+# 2. cert-manager (issues the webhook's TLS certificate)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml
+kubectl wait --for=condition=Available --timeout=180s deployment -n cert-manager --all
+
+# 3. Prometheus (picks up all PrometheusRules and ServiceMonitors)
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts && helm repo update
+helm install kps prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --create-namespace \
+  --set prometheus.prometheusSpec.ruleSelectorNilUsesHelmValues=false \
+  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+  --set grafana.enabled=false --set alertmanager.enabled=false
+
+# 4. a demo app that exposes a metric (+ ServiceMonitor)
+kubectl apply -f hack/e2e/demo-app.yaml
+
+# 5. install the CRD, then build + deploy the operator
+make install
+make docker-build IMG=slo-operator:dev
+minikube image load slo-operator:dev
+make deploy IMG=slo-operator:dev
+
+# 6. create a SLO and watch it evaluate the budget
+kubectl apply -f hack/e2e/slo.yaml
+kubectl get slo -n demo        # PHASE Healthy, BUDGET-REMAINING ~100
+```
+
+To see enforcement kick in, inject errors and watch the budget drain:
+
+```bash
+kubectl port-forward -n demo svc/checkout 8080:8080 &   # then, in the same shell:
+curl "localhost:8080/set-errors?n=5"                    # ~33% error rate
+kubectl get slo -n demo -w                               # ~1-2 min -> Exhausted
+kubectl get deploy checkout -n demo --show-labels        # slo.io/budget-exhausted=true
+```
+
+> The operator reads Prometheus at `--prometheus-url`; the deployed manifest points
+> at the `kps` release used above. Adjust it if your Prometheus Service differs.
+
+---
+
 ## Getting started (development)
 
 Prerequisites: Go 1.26, `make`, and (for integration tests) the envtest binaries.
@@ -195,8 +244,10 @@ orchestration in the controller.**
 - [x] Error-budget evaluation from Prometheus (budget %, burn rate, phase, events)
 - [x] Admission webhooks (defaulting + validation, PromQL parsing, immutability)
 - [x] Enforcement: label Deployments when the budget is exhausted (+ VAP example)
-- [ ] CI (lint + test + build) and multi-arch release image
-- [ ] End-to-end tests on kind + quickstart
+- [x] CI: lint + test workflows, and a multi-arch release image to GHCR on tag
+- [x] Quickstart on a local cluster (see above)
+- [ ] Fuller end-to-end test scenario (the current `test/e2e` is the scaffold)
+- [ ] Tag `v0.1.0`
 
 ---
 

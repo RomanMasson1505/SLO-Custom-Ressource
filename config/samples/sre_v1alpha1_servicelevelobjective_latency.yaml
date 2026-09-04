@@ -1,0 +1,20 @@
+apiVersion: sre.slo.romanmasson.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  labels:
+    app.kubernetes.io/name: slo-custom-ressource
+    app.kubernetes.io/managed-by: kustomize
+  name: checkout-latency
+spec:
+  description: "Checkout API latency: 99% of requests under 300ms"
+  objective: "99"
+  window: 30d
+  sli:
+    type: latency
+    # Denominator: all requests.
+    totalQuery: sum(rate(http_request_duration_seconds_count{service="checkout"}[{{.Window}}]))
+    # Numerator (bad events): requests slower than 300ms, i.e. total minus those
+    # served within the 0.3s histogram bucket.
+    errorQuery: >-
+      sum(rate(http_request_duration_seconds_count{service="checkout"}[{{.Window}}]))
+      - sum(rate(http_request_duration_seconds_bucket{service="checkout",le="0.3"}[{{.Window}}]))
