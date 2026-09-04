@@ -6,6 +6,8 @@ cliVersion: 4.15.0
 domain: slo.romanmasson.dev
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v1-alpha: {}
 projectName: slo-custom-ressource
 repo: github.com/RomanMasson1505/SLO-Custom-Ressource
 resources:

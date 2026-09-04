@@ -139,6 +139,28 @@ blocks* cleanly separated.
 
 ---
 
+## Install with Helm
+
+For consumers who just want to run the operator (no clone, no build), a Helm chart
+is generated under [`dist/chart`](dist/chart). It installs the CRD, RBAC, the manager
+Deployment (pointing at the published GHCR image), and the webhooks in one command.
+
+Prerequisites in the cluster: **cert-manager** (for webhook TLS) and a **Prometheus**
+the operator can reach.
+
+```bash
+helm install slo-operator ./dist/chart \
+  --namespace slo-system --create-namespace \
+  --set controllerManager.container.image.tag=v0.1.0 \
+  --set-string 'controllerManager.container.args[3]=--prometheus-url=http://<your-prometheus>.svc:9090'
+```
+
+Everything is configurable through `dist/chart/values.yaml` (image, replicas,
+Prometheus URL, whether to install the CRD, etc.). The chart references the image
+published by the release workflow, so no local build is needed.
+
+---
+
 ## Quickstart (local cluster)
 
 Try the whole thing end to end on a local cluster (minikube shown; kind works too).
@@ -245,6 +267,7 @@ orchestration in the controller.**
 - [x] Admission webhooks (defaulting + validation, PromQL parsing, immutability)
 - [x] Enforcement: label Deployments when the budget is exhausted (+ VAP example)
 - [x] CI: lint + test workflows, and a multi-arch release image to GHCR on tag
+- [x] Helm chart for one-command install (`dist/chart`)
 - [x] Quickstart on a local cluster (see above)
 - [ ] Fuller end-to-end test scenario (the current `test/e2e` is the scaffold)
 - [ ] Tag `v0.1.0`

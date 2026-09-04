@@ -1,0 +1,264 @@
+{{- if .Values.crd.enable }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.crd.keep }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: servicelevelobjectives.sre.slo.romanmasson.dev
+spec:
+  group: sre.slo.romanmasson.dev
+  names:
+    kind: ServiceLevelObjective
+    listKind: ServiceLevelObjectiveList
+    plural: servicelevelobjectives
+    shortNames:
+    - slo
+    singular: servicelevelobjective
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.objective
+      name: Objective
+      type: string
+    - jsonPath: .spec.window
+      name: Window
+      type: string
+    - jsonPath: .status.errorBudgetRemaining
+      name: Budget-Remaining
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ServiceLevelObjective is the Schema for the servicelevelobjectives
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of ServiceLevelObjective
+            properties:
+              description:
+                description: Description is a human-readable summary of the SLO.
+                type: string
+              enforcement:
+                description: Enforcement is optional opt-in behaviour (freeze deployments
+                  when the budget is gone).
+                properties:
+                  freezeDeployments:
+                    description: FreezeDeployments, when true, labels the matching
+                      Deployments once the budget is exhausted.
+                    type: boolean
+                  selector:
+                    description: |-
+                      Selector picks the target Deployments in the SLO's namespace.
+                      The validating webhook requires it when FreezeDeployments is true.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              objective:
+                description: |-
+                  Objective is the target in percent, e.g. "99.9".
+                  We keep it as a string on purpose: floats lose precision (99.9 -> 99.90000001)
+                  and don't round-trip cleanly through JSON. We parse it with ParseFloat when needed.
+                type: string
+              sli:
+                description: SLI describes what we actually measure.
+                properties:
+                  errorQuery:
+                    description: |-
+                      ErrorQuery is the PromQL for the numerator (bad events), same {{.Window}} rules,
+                      e.g. sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}])).
+                    type: string
+                  totalQuery:
+                    description: |-
+                      TotalQuery is the PromQL for the denominator (all events).
+                      It may contain a {{.Window}} placeholder that the operator substitutes per burn-rate window,
+                      e.g. sum(rate(http_requests_total{service="checkout"}[{{.Window}}])).
+                    type: string
+                  type:
+                    description: Type is the kind of SLI. Kept as an enum so the API
+                      server rejects typos.
+                    enum:
+                    - availability
+                    - latency
+                    type: string
+                required:
+                - errorQuery
+                - totalQuery
+                - type
+                type: object
+              window:
+                default: 30d
+                description: Window is the rolling evaluation window, in Prometheus
+                  duration format (e.g. "30d").
+                type: string
+            required:
+            - objective
+            - sli
+            type: object
+          status:
+            description: status defines the observed state of ServiceLevelObjective
+            properties:
+              conditions:
+                description: |-
+                  Conditions are the standard, machine-readable state lines:
+                  Ready, RulesGenerated, PrometheusReachable, BudgetHealthy.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              currentBurnRate:
+                description: CurrentBurnRate is the latest 1h burn rate (how many
+                  times faster than "normal" we burn budget).
+                type: string
+              errorBudgetRemaining:
+                description: |-
+                  ErrorBudgetRemaining is the remaining error budget in percent (0-100).
+                  String for the same precision reason as Objective.
+                type: string
+              lastEvaluationTime:
+                description: LastEvaluationTime is when Prometheus was last queried
+                  successfully.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the controller
+                  last reconciled.
+                format: int64
+                type: integer
+              phase:
+                description: 'Phase is a one-word health summary: Healthy | Warning
+                  | Exhausted | Unknown.'
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end -}}
