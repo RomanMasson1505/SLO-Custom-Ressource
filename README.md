@@ -141,23 +141,25 @@ blocks* cleanly separated.
 
 ## Install with Helm
 
-For consumers who just want to run the operator (no clone, no build), a Helm chart
-is generated under [`dist/chart`](dist/chart). It installs the CRD, RBAC, the manager
-Deployment (pointing at the published GHCR image), and the webhooks in one command.
-
-Prerequisites in the cluster: **cert-manager** (for webhook TLS) and a **Prometheus**
-the operator can reach.
+The release workflow publishes a Helm chart to GHCR (OCI). Once a `v*` tag is
+released, install it in one command — no clone, no build:
 
 ```bash
-helm install slo-operator ./dist/chart \
-  --namespace slo-system --create-namespace \
-  --set controllerManager.container.image.tag=v0.1.0 \
-  --set-string 'controllerManager.container.args[3]=--prometheus-url=http://<your-prometheus>.svc:9090'
+helm install slo-operator \
+  oci://ghcr.io/romanmasson1505/charts/slo-custom-ressource --version 0.1.0 \
+  --namespace slo-system --create-namespace
 ```
 
-Everything is configurable through `dist/chart/values.yaml` (image, replicas,
-Prometheus URL, whether to install the CRD, etc.). The chart references the image
-published by the release workflow, so no local build is needed.
+Prerequisites in the cluster: **cert-manager** (for webhook TLS) and a **Prometheus**
+the operator can reach. Everything is configurable through
+[`dist/chart/values.yaml`](dist/chart/values.yaml) — image, replicas, the
+`--prometheus-url`, whether to install the CRD, etc.
+
+Before the first release you can also install straight from a clone:
+
+```bash
+helm install slo-operator ./dist/chart --namespace slo-system --create-namespace
+```
 
 ---
 
