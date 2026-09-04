@@ -1,0 +1,92 @@
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: slo-operator
+    slo_name: checkout
+  name: checkout-slo-rules
+  namespace: shop
+spec:
+  groups:
+  - name: slo.rules
+    rules:
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[5m]))) /
+        (sum(rate(http_requests_total{service="checkout"}[5m])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate5m
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[30m])))
+        / (sum(rate(http_requests_total{service="checkout"}[30m])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate30m
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[1h]))) /
+        (sum(rate(http_requests_total{service="checkout"}[1h])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate1h
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[2h]))) /
+        (sum(rate(http_requests_total{service="checkout"}[2h])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate2h
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[6h]))) /
+        (sum(rate(http_requests_total{service="checkout"}[6h])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate6h
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[1d]))) /
+        (sum(rate(http_requests_total{service="checkout"}[1d])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate1d
+    - expr: (sum(rate(http_requests_total{service="checkout",code=~"5.."}[3d]))) /
+        (sum(rate(http_requests_total{service="checkout"}[3d])))
+      labels:
+        slo_name: checkout
+        slo_namespace: shop
+      record: slo:sli_error:ratio_rate3d
+    - alert: SLOErrorBudgetBurn
+      annotations:
+        summary: SLO checkout is burning error budget 14.4x too fast
+      expr: slo:sli_error:ratio_rate5m{slo_name="checkout"} > 0.0144 and slo:sli_error:ratio_rate1h{slo_name="checkout"}
+        > 0.0144
+      for: 2m
+      labels:
+        severity: critical
+        slo_name: checkout
+        slo_namespace: shop
+    - alert: SLOErrorBudgetBurn
+      annotations:
+        summary: SLO checkout is burning error budget 6x too fast
+      expr: slo:sli_error:ratio_rate30m{slo_name="checkout"} > 0.006 and slo:sli_error:ratio_rate6h{slo_name="checkout"}
+        > 0.006
+      for: 2m
+      labels:
+        severity: critical
+        slo_name: checkout
+        slo_namespace: shop
+    - alert: SLOErrorBudgetBurn
+      annotations:
+        summary: SLO checkout is burning error budget 3x too fast
+      expr: slo:sli_error:ratio_rate2h{slo_name="checkout"} > 0.003 and slo:sli_error:ratio_rate1d{slo_name="checkout"}
+        > 0.003
+      for: 2m
+      labels:
+        severity: warning
+        slo_name: checkout
+        slo_namespace: shop
+    - alert: SLOErrorBudgetBurn
+      annotations:
+        summary: SLO checkout is burning error budget 1x too fast
+      expr: slo:sli_error:ratio_rate6h{slo_name="checkout"} > 0.001 and slo:sli_error:ratio_rate3d{slo_name="checkout"}
+        > 0.001
+      for: 2m
+      labels:
+        severity: warning
+        slo_name: checkout
+        slo_namespace: shop

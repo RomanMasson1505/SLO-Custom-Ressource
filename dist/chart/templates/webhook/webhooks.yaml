@@ -1,0 +1,67 @@
+{{- if .Values.webhook.enable }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: slo-custom-ressource-mutating-webhook-configuration
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- if .Values.certmanager.enable }}
+    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/serving-cert"
+    {{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+webhooks:
+  - name: mservicelevelobjective-v1alpha1.kb.io
+    clientConfig:
+      service:
+        name: slo-custom-ressource-webhook-service
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-sre-slo-romanmasson-dev-v1alpha1-servicelevelobjective
+    failurePolicy: Fail
+    sideEffects: None
+    admissionReviewVersions:
+      - v1
+    rules:
+      - operations:
+          - CREATE
+          - UPDATE
+        apiGroups:
+          - sre.slo.romanmasson.dev
+        apiVersions:
+          - v1alpha1
+        resources:
+          - servicelevelobjectives
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: slo-custom-ressource-validating-webhook-configuration
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- if .Values.certmanager.enable }}
+    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/serving-cert"
+    {{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+webhooks:
+  - name: vservicelevelobjective-v1alpha1.kb.io
+    clientConfig:
+      service:
+        name: slo-custom-ressource-webhook-service
+        namespace: {{ .Release.Namespace }}
+        path: /validate-sre-slo-romanmasson-dev-v1alpha1-servicelevelobjective
+    failurePolicy: Fail
+    sideEffects: None
+    admissionReviewVersions:
+      - v1
+    rules:
+      - operations:
+          - CREATE
+          - UPDATE
+        apiGroups:
+          - sre.slo.romanmasson.dev
+        apiVersions:
+          - v1alpha1
+        resources:
+          - servicelevelobjectives
+{{- end }}

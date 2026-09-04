@@ -28,3 +28,14 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+train-go/
+
+# Personal detailed implementation plan (not versioned)
+PLAN-DETAILLE.md
+
+# Personal interview / Q&A notes (not versioned)
+question/
+
+# Local e2e session / resume notes (not versioned)
+hack/e2e/SESSION.md

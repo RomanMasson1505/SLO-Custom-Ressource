@@ -1,0 +1,23 @@
+# A ServiceLevelObjective for the demo "checkout" app.
+#
+# It lives in the same namespace (demo) as the demo Deployment so enforcement can
+# find and freeze it. The window is short (5m) so rate() stabilises quickly during
+# a live demo (in production you'd use 30d).
+apiVersion: sre.slo.romanmasson.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: checkout-availability
+  namespace: demo
+spec:
+  description: "Checkout API availability (demo)"
+  objective: "99.9"
+  window: 5m
+  sli:
+    type: availability
+    totalQuery: sum(rate(http_requests_total{service="checkout"}[{{.Window}}]))
+    errorQuery: sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}]))
+  enforcement:
+    freezeDeployments: true
+    selector:
+      matchLabels:
+        app: checkout

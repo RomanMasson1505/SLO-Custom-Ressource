@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the slo-custom-ressource itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- servicelevelobjective_admin_role.yaml
+- servicelevelobjective_editor_role.yaml
+- servicelevelobjective_viewer_role.yaml
 - slo_admin_role.yaml
 - slo_editor_role.yaml
 - slo_viewer_role.yaml

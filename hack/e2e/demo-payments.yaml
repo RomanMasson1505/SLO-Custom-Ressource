@@ -1,0 +1,147 @@
+# Second demo workload: "payments".
+#
+# Same idea as checkout, but it starts WITH errors (errors_per_sec=5) so its SLO
+# is Exhausted out of the box — handy to see two SLOs in different states side by
+# side, handled by the SAME operator (no redeploy needed when adding an SLO).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payments-app
+  namespace: demo
+data:
+  app.py: |
+    import http.server
+    import threading
+    import time
+    from urllib.parse import urlparse, parse_qs
+
+    counts = {"200": 0, "500": 0}
+    errors_per_sec = 5  # starts unhealthy on purpose
+
+    def generate_traffic():
+        while True:
+            counts["200"] += 10
+            counts["500"] += errors_per_sec
+            time.sleep(1)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            global errors_per_sec
+            if self.path == "/metrics":
+                body = (
+                    "# HELP http_requests_total Total HTTP requests.\n"
+                    "# TYPE http_requests_total counter\n"
+                )
+                for code, n in counts.items():
+                    body += 'http_requests_total{service="payments",code="%s"} %d\n' % (code, n)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(body.encode())
+            elif self.path.startswith("/set-errors"):
+                q = parse_qs(urlparse(self.path).query)
+                errors_per_sec = int(q.get("n", ["0"])[0])
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(("errors_per_sec=%d\n" % errors_per_sec).encode())
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok\n")
+
+        def log_message(self, *args):
+            pass
+
+    threading.Thread(target=generate_traffic, daemon=True).start()
+    http.server.HTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: demo
+  labels:
+    app: payments
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments
+  template:
+    metadata:
+      labels:
+        app: payments
+    spec:
+      containers:
+        - name: app
+          image: python:3-alpine
+          command: ["python", "/app/app.py"]
+          ports:
+            - name: metrics
+              containerPort: 8080
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      volumes:
+        - name: code
+          configMap:
+            name: payments-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+  namespace: demo
+  labels:
+    app: payments
+spec:
+  selector:
+    app: payments
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payments
+  namespace: demo
+  labels:
+    app: payments
+spec:
+  selector:
+    matchLabels:
+      app: payments
+  namespaceSelector:
+    matchNames: ["demo"]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+---
+apiVersion: sre.slo.romanmasson.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: payments-availability
+  namespace: demo
+spec:
+  description: "Payments API availability (demo, starts exhausted)"
+  objective: "99.9"
+  window: 5m
+  sli:
+    type: availability
+    totalQuery: sum(rate(http_requests_total{service="payments"}[{{.Window}}]))
+    errorQuery: sum(rate(http_requests_total{service="payments",code=~"5.."}[{{.Window}}]))
+  enforcement:
+    freezeDeployments: true
+    selector:
+      matchLabels:
+        app: payments

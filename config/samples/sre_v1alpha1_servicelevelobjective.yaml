@@ -1,0 +1,23 @@
+apiVersion: sre.slo.romanmasson.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  labels:
+    app.kubernetes.io/name: slo-custom-ressource
+    app.kubernetes.io/managed-by: kustomize
+  name: checkout-availability
+spec:
+  description: "Checkout API availability"
+  objective: "99.9"
+  window: 30d
+  sli:
+    type: availability
+    totalQuery: sum(rate(http_requests_total{service="checkout"}[{{.Window}}]))
+    errorQuery: sum(rate(http_requests_total{service="checkout",code=~"5.."}[{{.Window}}]))
+  # Optional: label matching Deployments with slo.io/budget-exhausted=true when
+  # the error budget is exhausted. A ValidatingAdmissionPolicy (see
+  # validatingadmissionpolicy_freeze.yaml) can then freeze their rollouts.
+  enforcement:
+    freezeDeployments: true
+    selector:
+      matchLabels:
+        app: checkout

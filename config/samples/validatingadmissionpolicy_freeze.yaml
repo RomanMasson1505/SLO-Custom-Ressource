@@ -1,0 +1,40 @@
+# Example ValidatingAdmissionPolicy that freezes Deployment image changes once the
+# SLO operator has stamped them with slo.io/budget-exhausted=true.
+#
+# NOTE: the SLO operator does NOT install this policy. It is an opt-in example for
+# cluster administrators — the operator only sets the label; this policy decides
+# what to do with it. Apply it yourself with:
+#   kubectl apply -f config/samples/validatingadmissionpolicy_freeze.yaml
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: slo-freeze-deployments
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["deployments"]
+  variables:
+    - name: frozen
+      expression: >-
+        "slo.io/budget-exhausted" in object.metadata.labels &&
+        object.metadata.labels["slo.io/budget-exhausted"] == "true"
+    - name: imageChanged
+      expression: >-
+        object.spec.template.spec.containers.map(c, c.image) !=
+        oldObject.spec.template.spec.containers.map(c, c.image)
+  validations:
+    - expression: "!(variables.frozen && variables.imageChanged)"
+      message: "deployment image changes are frozen: the SLO error budget is exhausted"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: slo-freeze-deployments-binding
+spec:
+  policyName: slo-freeze-deployments
+  validationActions: ["Deny"]
